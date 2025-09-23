@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Comic Strip Editor</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide-react@latest/dist/umd/lucide-react.js"></script>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        // Paste the React component code here
+        import React, { useState, useRef, useCallback } from 'react';
+        import { Upload, MessageCircle, Trash2, Download } from 'lucide-react';
+        
+        const ComicStripEditor = () => {
+          const [currentTab, setCurrentTab] = useState('upload');
+          const [uploadedImages, setUploadedImages] = useState([]);
+          const [comicPanels, setComicPanels] = useState([null, null, null, null]);
+          const [speechBubbles, setSpeechBubbles] = useState([]);
+          const [selectedBubble, setSelectedBubble] = useState(null);
+          const [isDragging, setIsDragging] = useState(false);
+          const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+          const [isResizing, setIsResizing] = useState(false);
+          const [resizeHandle, setResizeHandle] = useState(null);
+          const [draggedImage, setDraggedImage] = useState(null);
+          const canvasRef = useRef(null);
+          const fileInputRef = useRef(null);
+        
+          const handleImagesUpload = (event) => {
+            const files = Array.from(event.target.files);
+            const imageFiles = files.filter(file => file.type.startsWith('image/')).slice(0, 4);
+            
+            const loadImages = imageFiles.map(file => {
+              return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                  resolve({
+                    id: Date.now() + Math.random(),
+                    name: file.name,
+                    src: e.target.result,
+                    file: file
+                  });
+                };
+                reader.readAsDataURL(file);
+              });
+            });
+        
+            Promise.all(loadImages).then(images => {
+              setUploadedImages(prev => [...prev, ...images].slice(0, 4));
+            });
+          };
+        
+          const handleImageDragStart = (e, image) => {
+            setDraggedImage(image);
+            e.dataTransfer.effectAllowed = 'copy';
+          };
+        
+          const handlePanelDragOver = (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+          };
+        
+          const handlePanelDrop = (e, panelIndex) => {
+            e.preventDefault();
+            if (draggedImage) {
+              const newPanels = [...comicPanels];
+              newPanels[panelIndex] = draggedImage;
+              setComicPanels(newPanels);
+              setDraggedImage(null);
+            }
+          };
+        
+          const removePanelImage = (panelIndex) => {
+            const newPanels = [...comicPanels];
+            newPanels[panelIndex] = null;
+            setComicPanels(newPanels);
+            
+            // Remove speech bubbles in this panel
+            setSpeechBubbles(prev => prev.filter(bubble => bubble.panelIndex !== panelIndex));
+          };
+        
+          const addSpeechBubble = (panelIndex) => {
+            if (!comicPanels[panelIndex]) return;
+            
+            const newBubble = {
+              id: Date.now(),
+              panelIndex,
+              x: 20,
+              y: 20,
+              width: 100,
+              height: 50,
+              text: 'New text',
+              fontSize: 12,
+              bubbleType: 'speech'
+            };
+            setSpeechBubbles([...speechBubbles, newBubble]);
+            setSelectedBubble(newBubble.id);
+          };
+        
+          const updateBubbleText = (id, newText) => {
+            setSpeechBubbles(prev => prev.map(bubble => 
+              bubble.id === id ? { ...bubble, text: newText } : bubble
+            ));
+          };
+        
+          const updateBubbleStyle = (id, updates) => {
+            setSpeechBubbles(prev => prev.map(bubble => 
+              bubble.id === id ? { ...bubble, ...updates } : bubble
+            ));
+          };
+        
+          const deleteBubble = (id) => {
+            setSpeechBubbles(prev => prev.filter(bubble => bubble.id !== id));
+            if (selectedBubble === id) {
+              setSelectedBubble(null);
+            }
+          };
+        
+          const handleMouseDown = useCallback((e, bubbleId, action = 'move') => {
+            e.preventDefault();
+            e.stopPropagation();
+            const bubble = speechBubbles.find(b => b.id === bubbleId);
+            if (bubble) {
+              const panelRect = e.currentTarget.closest('.comic-panel').getBoundingClientRect();
+              
+              if (action === 'move') {
+                setDragOffset({
+                  x: e.clientX - panelRect.left - bubble.x,
+                  y: e.clientY - panelRect.top - bubble.y
+                });
+                setSelectedBubble(bubbleId);
+                setIsDragging(true);
+              } else if (action === 'resize') {
+                setSelectedBubble(bubbleId);
+                setIsResizing(true);
+                setResizeHandle(action);
+              }
+            }
+          }, [speechBubbles]);
+        
+          const handleResizeMouseDown = useCallback((e, bubbleId, handle) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setSelectedBubble(bubbleId);
+            setIsResizing(true);
+            setResizeHandle(handle);
+          }, []);
+        
+          const handleMouseMove = useCallback((e) => {
+            if (isDragging && selectedBubble) {
+              const bubble = speechBubbles.find(b => b.id === selectedBubble);
+              if (bubble) {
+                const panelElement = document.querySelector(`[data-panel-index="${bubble.panelIndex}"]`);
+                if (panelElement) {
+                  const rect = panelElement.getBoundingClientRect();
+                  const newX = Math.max(0, Math.min(rect.width - bubble.width, e.clientX - rect.left - dragOffset.x));
+                  const newY = Math.max(0, Math.min(rect.height - bubble.height, e.clientY - rect.top - dragOffset.y));
+                  
+                  updateBubbleStyle(selectedBubble, { x: newX, y: newY });
+                }
+              }
+            } else if (isResizing && selectedBubble && resizeHandle) {
+              const bubble = speechBubbles.find(b => b.id === selectedBubble);
+              if (bubble) {
+                const panelElement = document.querySelector(`[data-panel-index="${bubble.panelIndex}"]`);
+                if (panelElement) {
+                  const rect = panelElement.getBoundingClientRect();
+                  const mouseX = e.clientX - rect.left;
+                  const mouseY = e.clientY - rect.top;
+                  
+                  let newWidth = bubble.width;
+                  let newHeight = bubble.height;
+                  let newX = bubble.x;
+                  let newY = bubble.y;
+                  
+                  if (resizeHandle.includes('right')) {
+                    newWidth = Math.max(60, Math.min(rect.width - bubble.x, mouseX - bubble.x));
+                  }
+                  if (resizeHandle.includes('bottom')) {
+                    newHeight = Math.max(30, Math.min(rect.height - bubble.y, mouseY - bubble.y));
+                  }
+                  if (resizeHandle.includes('left')) {
+                    const deltaX = mouseX - bubble.x;
+                    newWidth = Math.max(60, bubble.width - deltaX);
+                    newX = Math.max(0, Math.min(bubble.x + deltaX, bubble.x + bubble.width - 60));
+                  }
+                  if (resizeHandle.includes('top')) {
+                    const deltaY = mouseY - bubble.y;
+                    newHeight = Math.max(30, bubble.height - deltaY);
+                    newY = Math.max(0, Math.min(bubble.y + deltaY, bubble.y + bubble.height - 30));
+                  }
+                  
+                  updateBubbleStyle(selectedBubble, { 
+                    x: newX, 
+                    y: newY, 
+                    width: newWidth, 
+                    height: newHeight 
+                  });
+                }
+              }
+            }
+          }, [isDragging, isResizing, selectedBubble, dragOffset, resizeHandle, speechBubbles]);
+        
+          const handleMouseUp = useCallback(() => {
+            setIsDragging(false);
+            setIsResizing(false);
+            setResizeHandle(null);
+          }, []);
+        
+          const downloadComic = () => {
+            console.log('Download button clicked!');
+            console.log('Comic panels:', comicPanels);
+            console.log('Speech bubbles:', speechBubbles);
+            
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            const panelWidth = 300;
+            const panelHeight = 300;
+            const gap = 10;
+            
+            canvas.width = panelWidth * 2 + gap;
+            canvas.height = panelHeight * 2 + gap;
+            
+            console.log('Canvas created:', canvas.width, 'x', canvas.height);
+            
+            // White background
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            const panelPositions = [
+              { x: 0, y: 0 },
+              { x: panelWidth + gap, y: 0 },
+              { x: 0, y: panelHeight + gap },
+              { x: panelWidth + gap, y: panelHeight + gap }
+            ];
+            
+            const panelsWithImages = comicPanels.filter(panel => panel !== null);
+            console.log('Panels with images:', panelsWithImages.length);
+            
+            if (panelsWithImages.length === 0) {
+              console.log('No panels to download, creating empty comic');
+              // Create a simple download even with no images
+              const link = document.createElement('a');
+              link.download = 'empty-comic-strip.png';
+              link.href = canvas.toDataURL();
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              return;
+            }
+            
+            let loadedPanels = 0;
+            const totalPanels = panelsWithImages.length;
+            
+            comicPanels.forEach((panel, index) => {
+              if (panel) {
+                console.log(`Loading panel ${index + 1}:`, panel.name);
+                const img = new Image();
+                
+                img.onload = () => {
+                  console.log(`Panel ${index + 1} loaded successfully`);
+                  const pos = panelPositions[index];
+                  
+                  // Draw panel background
+                  ctx.fillStyle = '#f0f0f0';
+                  ctx.fillRect(pos.x, pos.y, panelWidth, panelHeight);
+                  
+                  // Draw image
+                  ctx.drawImage(img, pos.x, pos.y, panelWidth, panelHeight);
+                  
+                  // Draw speech bubbles for this panel
+                  const panelBubbles = speechBubbles.filter(bubble => bubble.panelIndex === index);
+                  console.log(`Drawing ${panelBubbles.length} bubbles for panel ${index + 1}`);
+                  
+                  panelBubbles.forEach(bubble => {
+                    const bubbleX = pos.x + bubble.x;
+                    const bubbleY = pos.y + bubble.y;
+                    
+                    // Draw bubble background with different styles
+                    ctx.fillStyle = 'white';
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = bubble.bubbleType === 'shout' ? 3 : 2;
+                    
+                    ctx.beginPath();
+                    if (bubble.bubbleType === 'thought') {
+                      // Circular thought bubble
+                      const radius = Math.min(bubble.width, bubble.height) / 2;
+                      ctx.arc(bubbleX + bubble.width/2, bubbleY + bubble.height/2, radius, 0, 2 * Math.PI);
+                      ctx.setLineDash([5, 5]);
+                    } else if (bubble.bubbleType === 'whisper') {
+                      ctx.roundRect(bubbleX, bubbleY, bubble.width, bubble.height, 8);
+                      ctx.setLineDash([3, 3]);
+                    } else {
+                      // Regular rounded rectangle for speech and shout
+                      const radius = bubble.bubbleType === 'shout' ? 4 : 8;
+                      ctx.roundRect(bubbleX, bubbleY, bubble.width, bubble.height, radius);
+                      ctx.setLineDash([]);
+                    }
+                    
+                    ctx.fill();
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    
+                    // Draw text
+                    ctx.fillStyle = '#000';
+                    ctx.font = `${bubble.fontSize}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    
+                    const words = bubble.text.split(' ');
+                    const lines = [];
+                    let currentLine = '';
+                    
+                    words.forEach(word => {
+                      const testLine = currentLine + (currentLine ? ' ' : '') + word;
+                      const metrics = ctx.measureText(testLine);
+                      if (metrics.width > bubble.width - 10 && currentLine) {
+                        lines.push(currentLine);
+                        currentLine = word;
+                      } else {
+                        currentLine = testLine;
+                      }
+                    });
+                    if (currentLine) lines.push(currentLine);
+                    
+                    const lineHeight = bubble.fontSize * 1.2;
+                    const startY = bubbleY + bubble.height / 2 - (lines.length - 1) * lineHeight / 2;
+                    
+                    lines.forEach((line, lineIndex) => {
+                      ctx.fillText(line, bubbleX + bubble.width / 2, startY + lineIndex * lineHeight);
+                    });
+                  });
+                  
+                  loadedPanels++;
+                  console.log(`Loaded panels: ${loadedPanels}/${totalPanels}`);
+                  
+                  if (loadedPanels === totalPanels) {
+                    console.log('All panels loaded, starting download...');
+                    try {
+                      // Download the image
+                      const link = document.createElement('a');
+                      link.download = 'comic-strip.png';
+                      link.href = canvas.toDataURL('image/png');
+                      
+                      // Temporarily add to DOM for Firefox compatibility
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                      
+                      console.log('Download initiated successfully!');
+                    } catch (error) {
+                      console.error('Download failed:', error);
+                      alert('Download failed. Please try again.');
+                    }
+                  }
+                };
+                
+                img.onerror = () => {
+                  console.error(`Failed to load panel ${index + 1}:`, panel.name);
+                  // Continue anyway
+                  loadedPanels++;
+                  if (loadedPanels === totalPanels) {
+                    console.log('Download with some failed panels...');
+                    const link = document.createElement('a');
+                    link.download = 'comic-strip.png';
+                    link.href = canvas.toDataURL('image/png');
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                  }
+                };
+                
+                img.src = panel.src;
+              }
+            });
+          };
+        
+          const getBubbleStyle = (bubble) => {
+            const baseStyle = {
+              backgroundColor: 'white',
+              border: '2px solid black',
+            };
+        
+            switch (bubble.bubbleType) {
+              case 'speech':
+                return {
+                  ...baseStyle,
+                  borderRadius: '12px',
+                };
+              case 'thought':
+                return {
+                  ...baseStyle,
+                  borderRadius: '50%',
+                  borderStyle: 'dashed',
+                };
+              case 'shout':
+                return {
+                  ...baseStyle,
+                  borderRadius: '4px',
+                  borderWidth: '3px',
+                  transform: 'rotate(-1deg)',
+                };
+              case 'whisper':
+                return {
+                  ...baseStyle,
+                  borderRadius: '12px',
+                  borderStyle: 'dotted',
+                  opacity: 0.9,
+                };
+              default:
+                return baseStyle;
+            }
+          };
+        
+          const selectedBubbleData = speechBubbles.find(b => b.id === selectedBubble);
+          const hasAnyPanels = comicPanels.some(panel => panel !== null);
+          
+          console.log('Download button state:', { hasAnyPanels, comicPanels });
+        
+          return (
+            <div className="min-h-screen bg-gray-50" onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
+              {/* Header */}
+              <div className="bg-white shadow-sm border-b">
+                <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+                  <h1 className="text-2xl font-bold text-gray-900">Comic Strip Editor</h1>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={downloadComic}
+                      disabled={!hasAnyPanels}
+                      className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors ${
+                        hasAnyPanels 
+                          ? 'bg-blue-600 hover:bg-blue-700 cursor-pointer' 
+                          : 'bg-gray-400 cursor-not-allowed'
+                      }`}
+                    >
+                      <Download size={16} />
+                      Download {hasAnyPanels ? '✓' : '✗'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+        
+              <div className="flex h-[calc(100vh-73px)]">
+                {/* Left Sidebar with Tabs */}
+                <div className="w-80 bg-white shadow-sm border-r flex flex-col">
+                  {/* Debug Panel */}
+                  <div className="px-4 py-2 bg-yellow-200 text-sm border-b">
+                    <strong>DEBUG: Current Tab = "{currentTab}"</strong>
+                  </div>
+        
+                  {/* Tab Headers */}
+                  <div className="flex border-b bg-gray-100">
+                    <button
+                      onClick={() => {
+                        console.log('CLICKING UPLOAD TAB');
+                        setCurrentTab('upload');
+                      }}
+                      className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                        currentTab === 'upload'
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      }`}
+                    >
+                      📤 Upload Images {currentTab === 'upload' ? '★' : ''}
+                    </button>
+                    <button
+                      onClick={() => {
+                        console.log('CLICKING EDITOR TAB');
+                        setCurrentTab('editor');
+                      }}
+                      className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                        currentTab === 'editor'
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      }`}
+                    >
+                      💬 Bubble Editor {currentTab === 'editor' ? '★' : ''}
+                    </button>
+                  </div>
+        
+                  {/* Tab Content */}
+                  <div className="flex-1 p-4 overflow-y-auto">
+                    {/* Upload Tab */}
+                    {currentTab === 'upload' && (
+                      <div className="space-y-6">
+                        <div className="p-3 bg-green-200 text-green-800 rounded font-bold">
+                          ✅ UPLOAD TAB CONTENT IS SHOWING
+                        </div>
+                        
+                        <div>
+                          <h3 className="text-lg font-semibold mb-3">Upload Images</h3>
+                          <button
+                            onClick={() => fileInputRef.current?.click()}
+                            className="w-full border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 hover:bg-blue-50 transition-colors"
+                          >
+                            <Upload className="mx-auto mb-2 text-gray-400" size={24} />
+                            <p className="text-sm text-gray-600">Click to upload up to 4 images</p>
+                            <p className="text-xs text-gray-500 mt-1">PNG, JPG, etc.</p>
+                          </button>
+                          <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            onChange={handleImagesUpload}
+                            className="hidden"
+                          />
+                        </div>
+        
+                        {uploadedImages.length > 0 && (
+                          <div>
+                            <h3 className="text-lg font-semibold mb-3">Your Images</h3>
+                            <div className="space-y-2">
+                              {uploadedImages.map((image) => (
+                                <div
+                                  key={image.id}
+                                  draggable
+                                  onDragStart={(e) => handleImageDragStart(e, image)}
+                                  className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg cursor-grab hover:bg-gray-100 transition-colors"
+                                >
+                                  <img 
+                                    src={image.src} 
+                                    alt={image.name}
+                                    className="w-12 h-12 object-cover rounded border"
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium text-gray-900 truncate">{image.name}</p>
+                                    <p className="text-xs text-gray-500">Drag to panel</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+        
+                    {/* Editor Tab */}
+                    {currentTab === 'editor' && (
+                      <div className="space-y-6">
+                        <div className="p-3 bg-blue-200 text-blue-800 rounded font-bold">
+                          ✅ EDITOR TAB CONTENT IS SHOWING
+                        </div>
+        
+                        {selectedBubbleData ? (
+                          <div>
+                            <h3 className="text-lg font-semibold mb-3">Edit Speech Bubble</h3>
+                            <div className="space-y-4">
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Text</label>
+                                <textarea
+                                  value={selectedBubbleData.text}
+                                  onChange={(e) => updateBubbleText(selectedBubble, e.target.value)}
+                                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  rows={3}
+                                  placeholder="Enter your text here..."
+                                />
+                              </div>
+                              
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Bubble Type</label>
+                                <select
+                                  value={selectedBubbleData.bubbleType}
+                                  onChange={(e) => updateBubbleStyle(selectedBubble, { bubbleType: e.target.value })}
+                                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                >
+                                  <option value="speech">💬 Speech</option>
+                                  <option value="thought">💭 Thought</option>
+                                  <option value="shout">❗ Shout</option>
+                                  <option value="whisper">🤫 Whisper</option>
+                                </select>
+                              </div>
+                              
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Font Size</label>
+                                <input
+                                  type="range"
+                                  min="8"
+                                  max="20"
+                                  value={selectedBubbleData.fontSize}
+                                  onChange={(e) => updateBubbleStyle(selectedBubble, { fontSize: parseInt(e.target.value) })}
+                                  className="w-full"
+                                />
+                                <span className="text-xs text-gray-500">{selectedBubbleData.fontSize}px</span>
+                              </div>
+        
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Width</label>
+                                <input
+                                  type="range"
+                                  min="60"
+                                  max="180"
+                                  value={selectedBubbleData.width}
+                                  onChange={(e) => updateBubbleStyle(selectedBubble, { width: parseInt(e.target.value) })}
+                                  className="w-full"
+                                />
+                                <span className="text-xs text-gray-500">{selectedBubbleData.width}px</span>
+                              </div>
+        
+                              <div>
+                                <label className="block text-sm font-medium text-gray-tml700 mb-1">Height</label>
+                                <input
+                                  type="range"
+                                  min="30"
+                                  max="100"
+                                  value={selectedBubbleData.height}
+                                  onChange={(e) => updateBubbleStyle(selectedBubble, { height: parseInt(e.target.value) })}
+                                  className="w-full"
+                                />
+                                <span className="text-xs text-gray-500">{selectedBubbleData.height}px</span>
+                              </div>
+        
+                              <button
+                                onClick={() => deleteBubble(selectedBubble)}
+                                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                              >
+                                <Trash2 size={16} />
+                                Delete Bubble
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-center py-8">
+                            <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                              <MessageCircle className="text-gray-400" size={24} />
+                            </div>
+                            <h3 className="text-lg font-medium text-gray-900 mb-2">No Bubble Selected</h3>
+                            <p className="text-sm text-gray-500 mb-4">Click on a speech bubble in the comic to edit it, or add a new one by clicking the green button on any panel.</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+        
+                {/* Main Canvas Area */}
+                <div className="flex-1 p-6">
+                  <div className="bg-white rounded-lg shadow-sm h-full p-6">
+                    <h2 className="text-xl font-semibold mb-4">Comic Strip Template</h2>
+                    
+                    {/* Comic Strip Grid */}
+                    <div className="grid grid-cols-2 gap-4 max-w-4xl mx-auto">
+                      {[0, 1, 2, 3].map((panelIndex) => (
+                        <div
+                          key={panelIndex}
+                          data-panel-index={panelIndex}
+                          className="comic-panel relative aspect-square border-2 border-dashed border-gray-300 rounded-lg bg-gray-50 hover:border-blue-400 hover:bg-blue-50 transition-colors"
+                          onDragOver={handlePanelDragOver}
+                          onDrop={(e) => handlePanelDrop(e, panelIndex)}
+                        >
+                          {comicPanels[panelIndex] ? (
+                            <>
+                              <img
+                                src={comicPanels[panelIndex].src}
+                                alt={`Panel ${panelIndex + 1}`}
+                                className="w-full h-full object-cover rounded-lg"
+                              />
+                              
+                              {/* Panel Controls */}
+                              <div className="absolute top-2 right-2 flex gap-1">
+                                <button
+                                  onClick={() => addSpeechBubble(panelIndex)}
+                                  className="p-1 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+                                  title="Add speech bubble"
+                                >
+                                  <MessageCircle size={14} />
+                                </button>
+                                <button
+                                  onClick={() => removePanelImage(panelIndex)}
+                                  className="p-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+                                  title="Remove image"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+        
+                              {/* Speech Bubbles for this panel */}
+                              {speechBubbles
+                                .filter(bubble => bubble.panelIndex === panelIndex)
+                                .map((bubble) => (
+                                  <div
+                                    key={bubble.id}
+                                    className={`absolute flex items-center justify-center cursor-move select-none ${
+                                      selectedBubble === bubble.id ? 'ring-2 ring-blue-500' : ''
+                                    }`}
+                                    style={{
+                                      left: bubble.x,
+                                      top: bubble.y,
+                                      width: bubble.width,
+                                      height: bubble.height,
+                                      fontSize: bubble.fontSize,
+                                      ...getBubbleStyle(bubble)
+                                    }}
+                                    onMouseDown={(e) => handleMouseDown(e, bubble.id)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedBubble(bubble.id);
+                                    }}
+                                  >
+                                    <div className="text-center p-2 leading-tight break-words text-xs">
+                                      {bubble.text}
+                                    </div>
+                                    
+                                    {selectedBubble === bubble.id && (
+                                      <>
+                                        {/* Resize handles */}
+                                        <div 
+                                          className="absolute -top-1 -left-1 w-3 h-3 bg-blue-500 border border-white rounded-full cursor-nw-resize"
+                                          onMouseDown={(e) => handleResizeMouseDown(e, bubble.id, 'top-left')}
+                                        />
+                                        <div 
+                                          className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 border border-white rounded-full cursor-ne-resize"
+                                          onMouseDown={(e) => handleResizeMouseDown(e, bubble.id, 'top-right')}
+                                        />
+                                        <div 
+                                          className="absolute -bottom-1 -left-1 w-3 h-3 bg-blue-500 border border-white rounded-full cursor-sw-resize"
+                                          onMouseDown={(e) => handleResizeMouseDown(e, bubble.id, 'bottom-left')}
+                                        />
+                                        <div 
+                                          className="absolute -bottom-1 -right-1 w-3 h-3 bg-blue-500 border border-white rounded-full cursor-se-resize"
+                                          onMouseDown={(e) => handleResizeMouseDown(e, bubble.id, 'bottom-right')}
+                                        />
+                                        
+                                        {/* Center indicator */}
+                                        <div className="absolute top-1/2 left-1/2 w-2 h-2 bg-blue-500 rounded-full transform -translate-x-1/2 -translate-y-1/2 pointer-events-none"></div>
+                                      </>
+                                    )}
+                                  </div>
+                                ))}
+                            </>
+                          ) : (
+                            <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                              <div className="w-8 h-8 mb-2 bg-gray-300 rounded opacity-50"></div>
+                              <p className="text-sm font-medium">Panel {panelIndex + 1}</p>
+                              <p className="text-xs">Drag image here</p>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    
+                    {uploadedImages.length === 0 && (
+                      <div className="text-center mt-8 text-gray-500">
+                        <p>Upload up to 4 images to start creating your comic strip</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        };
+        
+        export default ComicStripEditor;
+
+      
+        const { useState, useRef, useCallback } = React;
+        const { Upload, MessageCircle, Trash2, Download } = LucideReact;
+        
+        // [PASTE THE COMPONENT CODE HERE]
+        
+        ReactDOM.render(<ComicStripEditor />, document.getElementById('root'));
+    </script>
+</body>
+</html>
